@@ -8,6 +8,7 @@
     <script src='https://unpkg.com/react-dom@16.3.0-alpha.1/umd/react-dom.development.js'></script>
     <script src='https://unpkg.com/babel-standalone@6.15.0/babel.min.js'></script>
     <script src='https://tylermcginnis.com/goals-todos-api/index.js'></script>
+    <script src='https://unpkg.com/redux-thunk@2.2.0/dist/redux-thunk.min.js'></script>
   </head>
   <body>
     <div id='app'></div>
@@ -99,6 +100,18 @@
           goals,
         }
       }
+      function handleDeleteTodo (todo) {
+        return (dispatch) => {
+          // Optimistically delete todo item.
+          dispatch(removeTodoAction(todo.id))
+
+          return API.deleteTodo(todo.id)
+            .catch(() => {
+              dispatch(addTodoAction(todo))
+              alert('An error occurred. Try again.')
+            })
+        }
+      }
 
       function handleDeleteGoal (goal) {
         return (dispatch) => {
@@ -121,19 +134,6 @@
               cb()
             })
             .catch(() => alert('There was an error. Try again.'))
-        }
-      }
-
-      function handleDeleteTodo (todo) {
-        return (dispatch) => {
-          // Optimistically delete todo item.
-          dispatch(removeTodoAction(todo.id))
-
-          return API.deleteTodo(todo.id)
-            .catch(() => {
-              dispatch(addTodoAction(todo))
-              alert('An error occurred. Try again.')
-            })
         }
       }
 
@@ -168,7 +168,6 @@
           ]).then(([ todos, goals ]) => {
             dispatch(receiveDataAction(todos, goals))
           })
-
         }
       }
 
@@ -199,13 +198,13 @@
         return result
       }
 
-      const thunk = (store) => (next) => (action) => {
-        if (typeof action === 'function') {
-          return action(store.dispatch)
-        }
-
-        return next(action)
-      }
+      // const thunk = (store) => (next) => (action) => {
+      //   if (typeof action === 'function') {
+      //     return action(store.dispatch)
+      //   }
+      //
+      //   return next(action)
+      // }
 
       // Reducer function
       function todos (state = [], action) {
@@ -251,7 +250,7 @@
         todos,
         goals,
         loading,
-      }), Redux.applyMiddleware(thunk, checker, logger))
+      }), Redux.applyMiddleware(ReduxThunk.default, checker, logger))
 
     </script>
 
@@ -264,7 +263,7 @@
                 <span
                   onClick={() => props.toggle && props.toggle(item.id)}
                   style={{textDecoration: item.complete ? 'line-through' : 'none'}}>
-                  {item.name}
+                    {item.name}
                 </span>
                 <button onClick={() => props.remove(item)}>X</button>
               </li>
@@ -277,18 +276,18 @@
         addItem = (e) => {
           e.preventDefault()
 
-          this.props.store.dispatch(handleAddTodo(
+          this.props.dispatch(handleAddTodo(
             this.input.value,
             () => this.input.value = ''
           ))
         }
 
         removeItem = (todo) => {
-          this.props.store.dispatch(handleDeleteTodo(todo))
+          this.props.dispatch(handleDeleteTodo(todo))
         }
 
         toggleItem = (id) => {
-          this.props.store.dispatch(handleToggle(id))
+          this.props.dispatch(handleToggle(id))
         }
         render() {
           return (
@@ -302,9 +301,9 @@
               <button onClick={this.addItem}>Add Todo</button>
 
               <List
+                toggle={this.toggleItem}
                 items={this.props.todos}
                 remove={this.removeItem}
-                toggle={this.toggleItem}
               />
             </div>
           )
@@ -314,21 +313,20 @@
       class Goals extends React.Component {
         addItem = (e) => {
           e.preventDefault()
-
-          this.props.store.dispatch(handleAddGoal(
+          this.props.dispatch(handleAddGoal(
             this.input.value,
             () => this.input.value = ''
           ))
         }
 
         removeItem = (goal) => {
-          this.props.store.dispatch(handleDeleteGoal(goal))
+          this.props.dispatch(handleDeleteGoal(goal))
         }
 
         render() {
           return (
             <div>
-              <h1>Todo List</h1>
+              <h1>Goals</h1>
               <input
                 type='text'
                 placeholder='Add Goal'
@@ -345,17 +343,22 @@
         }
       }
 
+      const ConnectedTodos = connect((state) => ({
+        todos: state.todos
+      }))(Todos)
+
+      const ConnectedGoals = connect((state) => ({
+        goals: state.goals
+      }))(Goals)
+
       class App extends React.Component {
         componentDidMount() {
-          const { store } = this.props
+          const { dispatch } = this.props
 
-          this.props.store.dispatch(handleInitialData())
-
-          store.subscribe(() => this.forceUpdate())
+          dispatch(handleInitialData())
         }
         render() {
-          const { store } = this.props
-          const { todos, goals, loading } = store.getState()
+          const { loading } = this.props
 
           if (loading === true) {
             return <h3>Loading</h3>
@@ -363,15 +366,66 @@
 
           return (
             <div>
-              <Todos todos={todos} store={this.props.store} />
-              <Goals goals={goals} store={this.props.store} />
+              <ConnectedTodos />
+              <ConnectedGoals />
             </div>
           )
         }
       }
 
+      const ConnectedApp = connect((state) => ({
+        loading: state.loading
+      }))(App)
+
+      const Context = React.createContext()
+
+      function connect (mapStateToProps) {
+        return (Component) => {
+          class Receiver extends React.Component {
+            componentDidMount() {
+              const { subscribe } = this.props.store
+
+              this.unsubscribe = subscribe(() => this.forceUpdate())
+            }
+            componentWillUnmount() {
+              this.unsubscribe()
+            }
+            render() {
+              const { dispatch, getState } = store
+              const state = getState()
+              const stateNeeded = mapStateToProps(state)
+
+              return <Component {...stateNeeded} dispatch={dispatch} />
+            }
+          }
+
+          class ConnectedComponent extends React.Component {
+            render () {
+              return (
+                <Context.Consumer>
+                  {(store) => <Receiver store={store} />}
+                </Context.Consumer>
+              )
+            }
+          }
+          return ConnectedComponent
+        }
+      }
+
+      class Provider extends React.Component {
+        render() {
+          return (
+            <Context.Provider value={this.props.store}>
+              {this.props.children}
+            </Context.Provider>
+          )
+        }
+      }
+
       ReactDOM.render(
-        <App store={store}/>,
+        <Provider store={store}>
+          <ConnectedApp/>
+        </Provider>,
         document.getElementById('app')
       )
     </script>
